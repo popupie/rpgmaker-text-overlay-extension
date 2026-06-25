@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "RPG Maker Text Overlay Extension",
+  "version": "0.1.0",
+  "description": "DOM text layer for RPG Maker MV/MZ games.",
+  "permissions": ["storage", "activeTab"],
+  "action": {
+    "default_title": "Enable text overlay for this page"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
