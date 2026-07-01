@@ -6,17 +6,24 @@
   window.__rpgMakerTextOverlayInstalled = true;
 
   const OWNER_ID = "__rpgTextOverlayOwnerId";
-  const TRANSPARENT_EVENT = "rpg-text-overlay:set-transparent";
+  const SETTINGS_EVENT = "rpg-text-overlay:set-settings";
+  const DEFAULT_GUARD = {
+    enabled: true,
+    triggers: [],
+  };
   const state = {
     active: false,
     readerMode: false,
     enabledForPage: false,
+    guard: DEFAULT_GUARD,
+    consumedGuardKeyCodes: new Set(),
     nextOwnerId: 1,
     bitmapOwners: new WeakMap(),
     entries: new Map(),
     lineGroups: new Map(),
     raf: 0,
     installedHooks: false,
+    inputGuardInstalled: false,
     root: null,
   };
 
@@ -84,27 +91,20 @@
     document.documentElement.appendChild(state.root);
   }
 
-  function setActive(active) {
+  function setSettings(settings) {
     ensureDom();
-    state.active = active;
-    refreshRootClasses();
-    scheduleFlush();
-  }
-
-  function setTransparentEnabled(enabled) {
-    ensureDom();
-    state.enabledForPage = enabled;
-    if (!enabled) {
+    state.enabledForPage = Boolean(settings && settings.overlayEnabled);
+    state.active = Boolean(state.enabledForPage && settings && settings.showEnabled);
+    state.readerMode = state.enabledForPage;
+    const nextGuard = normalizeGuard(settings && settings.guard);
+    state.guard = nextGuard;
+    if (!state.enabledForPage) {
       state.readerMode = false;
       state.active = false;
+      clearGuardState();
+    } else if (!nextGuard.enabled || !nextGuard.triggers.length) {
+      clearGuardState();
     }
-    refreshRootClasses();
-    scheduleFlush();
-  }
-
-  function setReaderMode(enabled) {
-    ensureDom();
-    state.readerMode = enabled;
     refreshRootClasses();
     scheduleFlush();
   }
@@ -112,53 +112,205 @@
   function refreshRootClasses() {
     ensureDom();
     state.root.classList.toggle("rpg-text-overlay-active", overlayIsActive());
-    state.root.classList.toggle("rpg-text-overlay-readable", state.active);
-    state.root.classList.toggle("rpg-text-overlay-reader", state.readerMode);
+    state.root.classList.toggle("rpg-text-overlay-readable", state.enabledForPage && state.active);
+    state.root.classList.toggle("rpg-text-overlay-reader", state.enabledForPage && state.readerMode);
   }
 
   function overlayIsActive() {
-    return state.active || state.enabledForPage || state.readerMode;
+    return state.enabledForPage;
   }
 
-  document.addEventListener(TRANSPARENT_EVENT, (event) => {
-    setTransparentEnabled(Boolean(event.detail && event.detail.enabled));
+  document.addEventListener(SETTINGS_EVENT, (event) => {
+    setSettings(event.detail || {});
   });
 
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.defaultPrevented || event.repeat) {
-        return;
-      }
-
-      if (
-        event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        event.code === "KeyT"
-      ) {
-        event.preventDefault();
-        if (state.enabledForPage) {
-          setActive(!state.active);
-        }
-      }
-
-      if (
-        event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        event.code === "KeyR"
-      ) {
-        event.preventDefault();
-        if (state.enabledForPage) {
-          setReaderMode(!state.readerMode);
-        }
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    window.addEventListener(type, handleDictionaryGuardKeyEvent, true);
+  }
+  window.addEventListener("blur", clearGuardState, true);
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      if (document.visibilityState !== "visible") {
+        clearGuardState();
       }
     },
     true,
   );
+
+  function normalizeGuard(guard) {
+    const next = guard && typeof guard === "object" ? guard : DEFAULT_GUARD;
+    const hasTriggers = Array.isArray(next.triggers);
+    const triggers = hasTriggers ? next.triggers.map(normalizeKeyChord).filter(Boolean) : DEFAULT_GUARD.triggers;
+    return {
+      enabled: next.enabled !== false,
+      triggers,
+    };
+  }
+
+  function normalizeKeyChord(chord) {
+    if (!chord || typeof chord !== "object") {
+      return null;
+    }
+    return {
+      code: typeof chord.code === "string" && chord.code ? chord.code : undefined,
+      altKey: Boolean(chord.altKey),
+      ctrlKey: Boolean(chord.ctrlKey),
+      metaKey: Boolean(chord.metaKey),
+      shiftKey: Boolean(chord.shiftKey),
+      label: typeof chord.label === "string" && chord.label ? chord.label : "Key",
+    };
+  }
+
+  function dictionaryGuardActive() {
+    return Boolean(state.enabledForPage && state.guard && state.guard.enabled && state.guard.triggers.length);
+  }
+
+  function handleDictionaryGuardKeyEvent(event) {
+    if (event.code === "Escape") {
+      clearGuardState();
+      return;
+    }
+    maybeConsumeDictionaryDismissKeyEvent(event);
+  }
+
+  function maybeConsumeDictionaryDismissKeyEvent(event) {
+    if (event.type === "keyup" && state.consumedGuardKeyCodes.has(event.code)) {
+      state.consumedGuardKeyCodes.delete(event.code);
+      releaseRpgMakerInputState(event);
+      consumeEvent(event);
+      return true;
+    }
+    if (event.type === "keyup" && guardReleaseMatchesKeyEvent(event)) {
+      state.consumedGuardKeyCodes.delete(event.code);
+      releaseRpgMakerInputState(event);
+      consumeEvent(event);
+      return true;
+    }
+    if (!dictionaryGuardActive()) {
+      return false;
+    }
+    const match = state.guard.triggers.find((trigger) => guardTriggerMatchesKeyEvent(event, trigger));
+    if (!match) {
+      return false;
+    }
+    releaseRpgMakerInputState(event);
+    consumeEvent(event);
+    if (event.type === "keydown") {
+      state.consumedGuardKeyCodes.add(event.code);
+    }
+    if (event.type === "keyup") {
+      state.consumedGuardKeyCodes.delete(event.code);
+    }
+    return true;
+  }
+
+  function guardReleaseMatchesKeyEvent(event) {
+    if (!state.guard || !state.guard.enabled || !state.guard.triggers.length) {
+      return false;
+    }
+    return state.guard.triggers.some((trigger) => {
+      if (trigger.code) {
+        return event.code === trigger.code;
+      }
+      return modifierOnlyTriggerMatchesEventCode(event.code, trigger);
+    });
+  }
+
+  function guardTriggerMatchesKeyEvent(event, trigger) {
+    if (!exactModifierMatch(event, trigger)) {
+      return false;
+    }
+    if (trigger.code) {
+      return event.code === trigger.code;
+    }
+    return modifierOnlyTriggerMatchesEventCode(event.code, trigger);
+  }
+
+  function modifierOnlyTriggerMatchesEventCode(code, trigger) {
+    return (
+      (trigger.altKey && (code === "AltLeft" || code === "AltRight")) ||
+      (trigger.ctrlKey && (code === "ControlLeft" || code === "ControlRight")) ||
+      (trigger.metaKey && (code === "MetaLeft" || code === "MetaRight")) ||
+      (trigger.shiftKey && (code === "ShiftLeft" || code === "ShiftRight"))
+    );
+  }
+
+  function installDictionaryGuardInputHooks() {
+    if (state.inputGuardInstalled) {
+      return;
+    }
+
+    const input = window.Input;
+    if (!input || typeof input._onKeyDown !== "function" || typeof input._onKeyUp !== "function") {
+      setTimeout(installDictionaryGuardInputHooks, 250);
+      return;
+    }
+
+    state.inputGuardInstalled = true;
+    const originalKeyDown = input._onKeyDown;
+    const originalKeyUp = input._onKeyUp;
+
+    input._onKeyDown = function (event) {
+      if (dictionaryGuardInputShouldBlock(event)) {
+        state.consumedGuardKeyCodes.add(event.code);
+        releaseRpgMakerInputState(event);
+        consumeEvent(event);
+        return;
+      }
+      return originalKeyDown.apply(this, arguments);
+    };
+
+    input._onKeyUp = function (event) {
+      if (state.consumedGuardKeyCodes.has(event.code) || dictionaryGuardInputShouldBlock(event)) {
+        state.consumedGuardKeyCodes.delete(event.code);
+        releaseRpgMakerInputState(event);
+        consumeEvent(event);
+        return;
+      }
+      return originalKeyUp.apply(this, arguments);
+    };
+  }
+
+  function dictionaryGuardInputShouldBlock(event) {
+    if (!dictionaryGuardActive()) {
+      return false;
+    }
+    return state.guard.triggers.some((trigger) => guardTriggerMatchesKeyEvent(event, trigger));
+  }
+
+  function releaseRpgMakerInputState(event) {
+    const input = window.Input;
+    const keyName = input?.keyMapper?.[event.keyCode];
+    if (!keyName || !input._currentState) {
+      return;
+    }
+    input._currentState[keyName] = false;
+    if (input._latestButton === keyName) {
+      input._latestButton = null;
+    }
+  }
+
+  function consumeEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+  }
+
+  function exactModifierMatch(event, trigger) {
+    return (
+      Boolean(event.altKey) === Boolean(trigger.altKey) &&
+      Boolean(event.ctrlKey) === Boolean(trigger.ctrlKey) &&
+      Boolean(event.metaKey) === Boolean(trigger.metaKey) &&
+      Boolean(event.shiftKey) === Boolean(trigger.shiftKey)
+    );
+  }
+
+  function clearGuardState() {
+    state.consumedGuardKeyCodes.clear();
+  }
 
   // Waits until RPG Maker MV/MZ globals exist before installing hooks.
   function waitForRpgMaker() {
@@ -194,6 +346,7 @@
       return;
     }
     state.installedHooks = true;
+    installDictionaryGuardInputHooks();
 
     // All window text eventually draws through Bitmap.drawText.
     const bitmapDrawText = Bitmap.prototype.drawText;

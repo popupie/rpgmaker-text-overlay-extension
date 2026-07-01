@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RPG Text Overlay</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header>
+        <h1>Text Overlay</h1>
+        <span id="status" class="status">Loading</span>
+      </header>
+
+      <section class="controls" aria-label="Overlay controls">
+        <label class="toggle-row">
+          <span>
+            <strong>Overlay</strong>
+            <small>Transparent same-place text</small>
+          </span>
+          <input id="overlay-toggle" type="checkbox">
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Show</strong>
+            <small>Readable overlay text</small>
+          </span>
+          <input id="show-toggle" type="checkbox">
+        </label>
+      </section>
+
+      <section class="guard-panel" aria-label="Guard settings">
+        <label class="toggle-row">
+          <span>
+            <strong>Guard</strong>
+            <small>Block keys from reaching the game</small>
+          </span>
+          <input id="guard-toggle" type="checkbox">
+        </label>
+
+        <div id="guard-chips" class="guard-chips"></div>
+
+        <button id="add-key" class="add-key" type="button">
+          <span aria-hidden="true">+</span>
+          <span id="add-key-label">Add key</span>
+        </button>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

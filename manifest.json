@@ -5,7 +5,8 @@
   "description": "DOM text layer for RPG Maker MV/MZ games.",
   "permissions": ["storage", "activeTab"],
   "action": {
-    "default_title": "Enable text overlay for this page"
+    "default_title": "RPG Maker text overlay",
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js"
