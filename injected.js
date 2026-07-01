@@ -138,6 +138,39 @@
     true,
   );
 
+  for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "touchstart", "touchend"]) {
+    window.addEventListener(type, consumeOverlayTextPointerEvent, true);
+    window.addEventListener(type, restoreGameFocusAfterSurfacePointer, true);
+  }
+
+  function overlayTextEntry(target) {
+    return target instanceof Element ? target.closest(".rpg-text-overlay-entry") : null;
+  }
+
+  function consumeOverlayTextPointerEvent(event) {
+    if (!overlayTextEntry(event.target)) {
+      return;
+    }
+    event.stopPropagation();
+  }
+
+  function restoreGameFocusAfterSurfacePointer(event) {
+    if (overlayTextEntry(event.target) || !eventTargetsGameSurface(event.target)) {
+      return;
+    }
+    if (!["pointerup", "mouseup", "click", "touchend"].includes(event.type)) {
+      return;
+    }
+    window.setTimeout(focusGameTarget, 0);
+  }
+
+  function eventTargetsGameSurface(target) {
+    if (target === document || target === document.body || target === document.documentElement) {
+      return true;
+    }
+    return target instanceof Element && Boolean(target.closest("canvas, video"));
+  }
+
   function normalizeGuard(guard) {
     const next = guard && typeof guard === "object" ? guard : DEFAULT_GUARD;
     const hasTriggers = Array.isArray(next.triggers);
@@ -310,6 +343,44 @@
 
   function clearGuardState() {
     state.consumedGuardKeyCodes.clear();
+  }
+
+  function focusGameTarget() {
+    const graphics = window.Graphics || {};
+    const canvas = graphics._canvas || document.querySelector("canvas");
+    const target = canvas || document.body || document.documentElement;
+    try {
+      window.focus();
+    } catch (_error) {
+      // Some hosts ignore scripted frame focus.
+    }
+    focusElement(document.documentElement);
+    focusElement(document.body);
+    focusElement(target);
+    if (canvas && canvas !== target) {
+      focusElement(canvas);
+    }
+  }
+
+  function focusElement(target) {
+    if (!target || typeof target.focus !== "function") {
+      return;
+    }
+    try {
+      if (target instanceof HTMLElement && !target.hasAttribute("tabindex")) {
+        target.tabIndex = -1;
+      }
+      if (target instanceof HTMLElement) {
+        target.style.outline = "none";
+      }
+      target.focus({ preventScroll: true });
+    } catch (_error) {
+      try {
+        target.focus();
+      } catch (_innerError) {
+        // Focus is best-effort; gameplay still works once the frame is active.
+      }
+    }
   }
 
   // Waits until RPG Maker MV/MZ globals exist before installing hooks.
