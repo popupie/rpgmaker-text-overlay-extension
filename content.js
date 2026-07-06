@@ -6,10 +6,15 @@
   document.documentElement.dataset.rpgTextOverlayInjected = "true";
 
   const SETTINGS_EVENT = "rpg-text-overlay:set-settings";
+  const RENDER_EVENT = "rpg-text-overlay:render";
   const GUARD_STORAGE_KEY = "rpg-text-overlay:guard";
   const DEFAULT_GUARD = {
     enabled: true,
     triggers: [],
+  };
+  const overlayState = {
+    root: null,
+    entries: new Map(),
   };
 
   function pageStorageKey(name) {
@@ -107,6 +112,103 @@
       guard: normalizeGuard(state.guard),
     });
   }
+
+  function ensureOverlayRoot() {
+    if (overlayState.root) {
+      return overlayState.root;
+    }
+
+    const root = document.createElement("div");
+    root.id = "rpg-text-overlay-root";
+    document.documentElement.appendChild(root);
+    overlayState.root = root;
+    return root;
+  }
+
+  function handleRenderEvent(event) {
+    let payload = null;
+    try {
+      payload = JSON.parse(String(event.detail || "{}"));
+    } catch (_error) {
+      return;
+    }
+
+    renderOverlay(payload);
+  }
+
+  function renderOverlay(payload) {
+    const root = ensureOverlayRoot();
+    const active = Boolean(payload.active);
+    const readable = Boolean(active && payload.readable);
+    const reader = Boolean(active && payload.reader);
+    const entries = Array.isArray(payload.entries) ? payload.entries : [];
+    const seen = new Set();
+
+    root.classList.toggle("rpg-text-overlay-active", active);
+    root.classList.toggle("rpg-text-overlay-readable", readable);
+    root.classList.toggle("rpg-text-overlay-reader", reader);
+
+    if (!active) {
+      clearOverlayEntries();
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry || typeof entry.key !== "string") {
+        continue;
+      }
+      seen.add(entry.key);
+      renderOverlayEntry(root, entry);
+    }
+
+    for (const [key, element] of overlayState.entries) {
+      if (!seen.has(key)) {
+        element.remove();
+        overlayState.entries.delete(key);
+      }
+    }
+  }
+
+  function renderOverlayEntry(root, entry) {
+    let element = overlayState.entries.get(entry.key);
+    if (!element) {
+      element = document.createElement("span");
+      element.className = "rpg-text-overlay-entry";
+      root.appendChild(element);
+      overlayState.entries.set(entry.key, element);
+    }
+
+    const text = typeof entry.text === "string" ? entry.text : "";
+    if (element.textContent !== text) {
+      element.textContent = text;
+      element.setAttribute("aria-label", text);
+      element.dataset.rpgText = text;
+      element.removeAttribute("title");
+    }
+
+    setStyleIfChanged(element, "left", `${entry.left || 0}px`);
+    setStyleIfChanged(element, "top", `${entry.top || 0}px`);
+    setStyleIfChanged(element, "width", `${Math.max(1, entry.width || 1)}px`);
+    setStyleIfChanged(element, "height", `${Math.max(1, entry.height || 1)}px`);
+    setStyleIfChanged(element, "fontSize", `${Math.max(1, entry.fontSize || entry.height || 1)}px`);
+    setStyleIfChanged(element, "fontFamily", entry.fontFace || "sans-serif");
+    setStyleIfChanged(element, "lineHeight", `${Math.max(1, entry.height || 1)}px`);
+  }
+
+  function setStyleIfChanged(element, name, value) {
+    if (element.style[name] !== value) {
+      element.style[name] = value;
+    }
+  }
+
+  function clearOverlayEntries() {
+    for (const element of overlayState.entries.values()) {
+      element.remove();
+    }
+    overlayState.entries.clear();
+  }
+
+  document.addEventListener(RENDER_EVENT, handleRenderEvent);
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message !== "object") {

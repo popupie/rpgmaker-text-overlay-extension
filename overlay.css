@@ -1,0 +1,55 @@
+#rpg-text-overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  display: none;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+#rpg-text-overlay-root.rpg-text-overlay-active {
+  display: block;
+}
+
+.rpg-text-overlay-entry {
+  position: fixed;
+  box-sizing: border-box;
+  display: block;
+  white-space: pre;
+  overflow: visible;
+  pointer-events: none;
+  user-select: text;
+  contain: layout style paint;
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 2px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  line-height: 1;
+  letter-spacing: 0;
+  word-spacing: 0;
+  font-kerning: none;
+  font-variant-ligatures: none;
+  opacity: 1;
+}
+
+#rpg-text-overlay-root:not(.rpg-text-overlay-readable) .rpg-text-overlay-entry {
+  color: transparent;
+  background: transparent;
+  opacity: 1;
+  text-shadow: none;
+}
+
+#rpg-text-overlay-root.rpg-text-overlay-readable .rpg-text-overlay-entry {
+  outline: none;
+  background: transparent;
+  opacity: 1;
+}
+
+#rpg-text-overlay-root.rpg-text-overlay-reader .rpg-text-overlay-entry {
+  pointer-events: auto;
+  cursor: text;
+}

@@ -7,6 +7,7 @@
 
   const OWNER_ID = "__rpgTextOverlayOwnerId";
   const SETTINGS_EVENT = "rpg-text-overlay:set-settings";
+  const RENDER_EVENT = "rpg-text-overlay:render";
   const DEFAULT_GUARD = {
     enabled: true,
     triggers: [],
@@ -24,75 +25,9 @@
     raf: 0,
     installedHooks: false,
     inputGuardInstalled: false,
-    root: null,
   };
 
-  const style = document.createElement("style");
-  style.textContent = `
-    #rpg-text-overlay-root {
-      position: fixed;
-      inset: 0;
-      z-index: 2147483647;
-      pointer-events: none;
-      display: none;
-      font-synthesis: none;
-      text-rendering: optimizeLegibility;
-    }
-
-    #rpg-text-overlay-root.rpg-text-overlay-active {
-      display: block;
-    }
-
-    .rpg-text-overlay-entry {
-      position: fixed;
-      box-sizing: border-box;
-      display: block;
-      white-space: pre;
-      overflow: visible;
-      pointer-events: none;
-      user-select: text;
-      contain: layout style paint;
-      color: rgba(255, 255, 255, 0.96);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.8);
-      background: rgba(0, 0, 0, 0.18);
-      border-radius: 2px;
-      padding: 0 1px;
-      line-height: 1;
-      opacity: 1;
-    }
-
-    #rpg-text-overlay-root:not(.rpg-text-overlay-readable) .rpg-text-overlay-entry {
-      color: transparent;
-      background: transparent;
-      opacity: 1;
-      text-shadow: none;
-    }
-
-    #rpg-text-overlay-root.rpg-text-overlay-readable .rpg-text-overlay-entry {
-      outline: none;
-      background: transparent;
-      opacity: 1;
-    }
-
-    #rpg-text-overlay-root.rpg-text-overlay-reader .rpg-text-overlay-entry {
-      pointer-events: auto;
-      cursor: text;
-    }
-  `;
-  document.documentElement.appendChild(style);
-
-  function ensureDom() {
-    if (state.root) {
-      return;
-    }
-
-    state.root = document.createElement("div");
-    state.root.id = "rpg-text-overlay-root";
-    document.documentElement.appendChild(state.root);
-  }
-
   function setSettings(settings) {
-    ensureDom();
     state.enabledForPage = Boolean(settings && settings.overlayEnabled);
     state.active = Boolean(state.enabledForPage && settings && settings.showEnabled);
     state.readerMode = state.enabledForPage;
@@ -105,15 +40,7 @@
     } else if (!nextGuard.enabled || !nextGuard.triggers.length) {
       clearGuardState();
     }
-    refreshRootClasses();
     scheduleFlush();
-  }
-
-  function refreshRootClasses() {
-    ensureDom();
-    state.root.classList.toggle("rpg-text-overlay-active", overlayIsActive());
-    state.root.classList.toggle("rpg-text-overlay-readable", state.enabledForPage && state.active);
-    state.root.classList.toggle("rpg-text-overlay-reader", state.enabledForPage && state.readerMode);
   }
 
   function overlayIsActive() {
@@ -370,9 +297,6 @@
       if (target instanceof HTMLElement && !target.hasAttribute("tabindex")) {
         target.tabIndex = -1;
       }
-      if (target instanceof HTMLElement) {
-        target.style.outline = "none";
-      }
       target.focus({ preventScroll: true });
     } catch (_error) {
       try {
@@ -539,9 +463,6 @@
 
   // Removes one overlay DOM entry.
   function removeEntry(key, entry) {
-    if (entry.element) {
-      entry.element.remove();
-    }
     state.entries.delete(key);
   }
 
@@ -561,7 +482,7 @@
     }
 
     const text = String(rawText);
-    if (!text || !text.trim()) {
+    if (!text) {
       return;
     }
 
@@ -719,12 +640,9 @@
     });
   }
 
-  // Renders captured entries into DOM text spans.
+  // Sends captured entries to the extension content script for CSP-safe DOM rendering.
   function flushOverlay() {
-    ensureDom();
-    if (!overlayIsActive()) {
-      return;
-    }
+    const entries = [];
 
     for (const [key, entry] of state.entries) {
       if (!entryIsVisible(entry)) {
@@ -738,44 +656,28 @@
         continue;
       }
 
-      if (!entry.element) {
-        entry.element = document.createElement("span");
-        entry.element.className = "rpg-text-overlay-entry";
-        state.root.appendChild(entry.element);
-      }
-
-      if (entry.element.textContent !== entry.text) {
-        entry.element.textContent = entry.text;
-        entry.element.setAttribute("aria-label", entry.text);
-        entry.element.dataset.rpgText = entry.text;
-        entry.element.removeAttribute("title");
-      }
-
-      setStyleIfChanged(entry.element, "left", `${rect.left}px`);
-      setStyleIfChanged(entry.element, "top", `${rect.top}px`);
-      setStyleIfChanged(entry.element, "width", `${Math.max(1, rect.width)}px`);
-      setStyleIfChanged(
-        entry.element,
-        "height",
-        `${Math.max(1, rect.height)}px`,
-      );
-      setStyleIfChanged(
-        entry.element,
-        "font",
-        `${Math.max(1, rect.fontSize)}px ${entry.fontFace || "sans-serif"}`,
-      );
-      setStyleIfChanged(
-        entry.element,
-        "lineHeight",
-        `${Math.max(1, rect.height)}px`,
-      );
+      entries.push({
+        key,
+        text: entry.text,
+        left: rect.left,
+        top: rect.top,
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+        fontSize: Math.max(1, rect.fontSize),
+        fontFace: entry.fontFace || "sans-serif",
+      });
     }
-  }
 
-  function setStyleIfChanged(element, name, value) {
-    if (element.style[name] !== value) {
-      element.style[name] = value;
-    }
+    document.dispatchEvent(
+      new CustomEvent(RENDER_EVENT, {
+        detail: JSON.stringify({
+          active: overlayIsActive(),
+          readable: state.enabledForPage && state.active,
+          reader: state.enabledForPage && state.readerMode,
+          entries,
+        }),
+      }),
+    );
   }
 
   function entryIsVisible(entry) {
