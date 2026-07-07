@@ -23,8 +23,11 @@
     entries: new Map(),
     lineGroups: new Map(),
     raf: 0,
+    lastScene: null,
     installedHooks: false,
     inputGuardInstalled: false,
+    sceneHooksInstalled: false,
+    sceneBaseHooksInstalled: false,
   };
 
   function setSettings(settings) {
@@ -342,6 +345,7 @@
     }
     state.installedHooks = true;
     installDictionaryGuardInputHooks();
+    installSceneHooks();
 
     // All window text eventually draws through Bitmap.drawText.
     const bitmapDrawText = Bitmap.prototype.drawText;
@@ -399,6 +403,121 @@
       }
       return result;
     };
+
+    const windowDestroy = Window.prototype.destroy;
+    if (typeof windowDestroy === "function") {
+      Window.prototype.destroy = function () {
+        forgetOwner(this);
+        const result = windowDestroy.apply(this, arguments);
+        scheduleFlush();
+        return result;
+      };
+    }
+  }
+
+  function installSceneHooks() {
+    installSceneManagerHooks();
+    installSceneBaseHooks();
+  }
+
+  function installSceneManagerHooks() {
+    if (state.sceneHooksInstalled) {
+      return;
+    }
+
+    const sceneManager = window.SceneManager;
+    if (!sceneManager) {
+      setTimeout(installSceneHooks, 250);
+      return;
+    }
+
+    state.sceneHooksInstalled = true;
+    state.lastScene = sceneManager._scene || null;
+
+    const changeScene = sceneManager.changeScene;
+    if (typeof changeScene === "function") {
+      sceneManager.changeScene = function () {
+        const result = changeScene.apply(this, arguments);
+        handleSceneMaybeChanged(this._scene || null);
+        return result;
+      };
+    }
+
+    const updateScene = sceneManager.updateScene;
+    if (typeof updateScene === "function") {
+      sceneManager.updateScene = function () {
+        const result = updateScene.apply(this, arguments);
+        handleSceneMaybeChanged(this._scene || null);
+        return result;
+      };
+    }
+  }
+
+  function installSceneBaseHooks() {
+    if (state.sceneBaseHooksInstalled) {
+      return;
+    }
+
+    const sceneBase = window.Scene_Base;
+    const terminate = sceneBase?.prototype?.terminate;
+    if (typeof terminate !== "function") {
+      setTimeout(installSceneBaseHooks, 250);
+      return;
+    }
+
+    state.sceneBaseHooksInstalled = true;
+    sceneBase.prototype.terminate = function () {
+      forgetScene(this);
+      const result = terminate.apply(this, arguments);
+      scheduleFlush();
+      return result;
+    };
+  }
+
+  function handleSceneMaybeChanged(scene) {
+    if (scene === state.lastScene) {
+      return;
+    }
+
+    state.lastScene = scene || null;
+    pruneInvisibleEntries();
+    scheduleFlush();
+  }
+
+  function pruneInvisibleEntries() {
+    for (const [key, entry] of state.entries) {
+      if (!entryIsVisible(entry)) {
+        removeEntry(key, entry);
+      }
+    }
+  }
+
+  function forgetScene(scene) {
+    for (const [key, entry] of state.entries) {
+      if (ownerBelongsToScene(entry.owner, scene)) {
+        removeEntry(key, entry);
+      }
+    }
+
+    for (const [key, group] of state.lineGroups) {
+      if (ownerBelongsToScene(group.owner, scene)) {
+        state.lineGroups.delete(key);
+      }
+    }
+  }
+
+  function forgetOwner(owner) {
+    for (const [key, entry] of state.entries) {
+      if (entry.owner === owner) {
+        removeEntry(key, entry);
+      }
+    }
+
+    for (const [key, group] of state.lineGroups) {
+      if (group.owner === owner) {
+        state.lineGroups.delete(key);
+      }
+    }
   }
 
   // Removes all overlay entries for one RPG Maker bitmap.
@@ -463,7 +582,18 @@
 
   // Removes one overlay DOM entry.
   function removeEntry(key, entry) {
+    if (entry) {
+      forgetLineGroupsForEntry(key);
+    }
     state.entries.delete(key);
+  }
+
+  function forgetLineGroupsForEntry(entryKey) {
+    for (const [key, group] of state.lineGroups) {
+      if (group.entryKey === entryKey) {
+        state.lineGroups.delete(key);
+      }
+    }
   }
 
   // Captures text drawn by an RPG Maker bitmap.
@@ -685,10 +815,39 @@
     if (!owner || owner.destroyed || !owner.parent) {
       return false;
     }
+    if (!ownerBelongsToActiveScene(owner)) {
+      return false;
+    }
     if (typeof owner.isClosed === "function" && owner.isClosed()) {
       return false;
     }
     return displayObjectIsVisible(owner);
+  }
+
+  function ownerBelongsToActiveScene(owner) {
+    const scene = currentScene();
+    if (!scene) {
+      return true;
+    }
+
+    return ownerBelongsToScene(owner, scene);
+  }
+
+  function ownerBelongsToScene(owner, scene) {
+    let current = owner;
+    let guard = 0;
+    while (current && guard++ < 30) {
+      if (current === scene) {
+        return true;
+      }
+      current = current.parent;
+    }
+
+    return false;
+  }
+
+  function currentScene() {
+    return window.SceneManager?._scene || state.lastScene || null;
   }
 
   // Converts RPG Maker window coordinates into browser page coordinates.
