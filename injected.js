@@ -708,7 +708,7 @@
       rect.width / (graphics.width || canvas.width || rect.width || 1);
     const scaleY =
       rect.height / (graphics.height || canvas.height || rect.height || 1);
-    const ownerPos = ownerWorldPosition(entry.owner);
+    const contentTransform = ownerContentTransform(entry.owner);
     const padding = Number(entry.owner.padding) || 0;
     const originX = entry.owner.origin ? Number(entry.owner.origin.x) || 0 : 0;
     const originY = entry.owner.origin ? Number(entry.owner.origin.y) || 0 : 0;
@@ -735,11 +735,13 @@
     }
 
     const pageLeft =
-      rect.left + (ownerPos.x + padding - originX + clipped.x) * scaleX;
+      rect.left +
+      (contentTransform.x + clipped.x * contentTransform.scaleX) * scaleX;
     const pageTop =
-      rect.top + (ownerPos.y + padding - originY + clipped.y) * scaleY;
-    const pageWidth = clipped.width * scaleX;
-    const pageHeight = clipped.height * scaleY;
+      rect.top +
+      (contentTransform.y + clipped.y * contentTransform.scaleY) * scaleY;
+    const pageWidth = clipped.width * contentTransform.scaleX * scaleX;
+    const pageHeight = clipped.height * contentTransform.scaleY * scaleY;
 
     if (
       pageLeft >= rect.right ||
@@ -756,7 +758,11 @@
       width: roundCssPixel(pageWidth),
       height: roundCssPixel(pageHeight),
       fontSize: roundCssPixel(
-        (entry.fontSize || entry.height || 24) * Math.min(scaleX, scaleY),
+        (entry.fontSize || entry.height || 24) *
+          Math.min(
+            contentTransform.scaleX * scaleX,
+            contentTransform.scaleY * scaleY,
+          ),
       ),
     };
   }
@@ -812,7 +818,52 @@
     };
   }
 
-  // Sums parent positions for an RPG Maker display object.
+  // Uses the actual contents sprite transform when RPG Maker exposes it.
+  function ownerContentTransform(owner) {
+    const contentSprite = owner?._windowContentsSprite || owner?._contentsSprite;
+    const transform = contentSprite?.worldTransform;
+    if (transform && Number.isFinite(transform.tx) && Number.isFinite(transform.ty)) {
+      return {
+        x: Number(transform.tx) || 0,
+        y: Number(transform.ty) || 0,
+        scaleX: transformScaleX(transform),
+        scaleY: transformScaleY(transform),
+      };
+    }
+
+    const ownerPos = ownerWorldPosition(owner);
+    const padding = Number(owner.padding) || 0;
+    const originX = owner.origin ? Number(owner.origin.x) || 0 : 0;
+    const originY = owner.origin ? Number(owner.origin.y) || 0 : 0;
+    return {
+      x: ownerPos.x + padding - originX,
+      y: ownerPos.y + padding - originY,
+      scaleX: 1,
+      scaleY: 1,
+    };
+  }
+
+  function transformScaleX(transform) {
+    const a = Number(transform.a);
+    const b = Number(transform.b);
+    const scale = Math.sqrt(
+      (Number.isFinite(a) ? a : 1) ** 2 +
+        (Number.isFinite(b) ? b : 0) ** 2,
+    );
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  function transformScaleY(transform) {
+    const c = Number(transform.c);
+    const d = Number(transform.d);
+    const scale = Math.sqrt(
+      (Number.isFinite(c) ? c : 0) ** 2 +
+        (Number.isFinite(d) ? d : 1) ** 2,
+    );
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  // Sums parent positions as a fallback for older/custom window implementations.
   function ownerWorldPosition(owner) {
     let x = 0;
     let y = 0;

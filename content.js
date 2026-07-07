@@ -118,9 +118,16 @@
       return overlayState.root;
     }
 
-    const root = document.createElement("div");
+    const existingRoots = document.querySelectorAll("#rpg-text-overlay-root");
+    const root = existingRoots[0] || document.createElement("div");
     root.id = "rpg-text-overlay-root";
-    document.documentElement.appendChild(root);
+    root.textContent = "";
+    if (!root.isConnected) {
+      document.documentElement.appendChild(root);
+    }
+    for (let index = 1; index < existingRoots.length; index++) {
+      existingRoots[index].remove();
+    }
     overlayState.root = root;
     return root;
   }
