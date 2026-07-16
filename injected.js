@@ -20,6 +20,7 @@
     consumedGuardKeyCodes: new Set(),
     nextOwnerId: 1,
     bitmapOwners: new WeakMap(),
+    contextOwners: new WeakMap(),
     entries: new Map(),
     lineGroups: new Map(),
     raf: 0,
@@ -28,6 +29,7 @@
     inputGuardInstalled: false,
     sceneHooksInstalled: false,
     sceneBaseHooksInstalled: false,
+    canvasTextCaptureDepth: 0,
   };
 
   function setSettings(settings) {
@@ -346,6 +348,7 @@
     state.installedHooks = true;
     installDictionaryGuardInputHooks();
     installSceneHooks();
+    installCanvasTextHooks();
 
     // All window text eventually draws through Bitmap.drawText.
     const bitmapDrawText = Bitmap.prototype.drawText;
@@ -357,9 +360,14 @@
       lineHeight,
       align,
     ) {
-      const result = bitmapDrawText.apply(this, arguments);
-      captureBitmapText(this, text, x, y, maxWidth, lineHeight, align);
-      return result;
+      state.canvasTextCaptureDepth++;
+      try {
+        const result = bitmapDrawText.apply(this, arguments);
+        captureBitmapText(this, text, x, y, maxWidth, lineHeight, align);
+        return result;
+      } finally {
+        state.canvasTextCaptureDepth--;
+      }
     };
 
     // Clearing a bitmap means old overlay text is stale.
@@ -381,7 +389,7 @@
     Window_Base.prototype.createContents = function () {
       const result = createContents.apply(this, arguments);
       if (this.contents) {
-        state.bitmapOwners.set(this.contents, this);
+        trackBitmapOwner(this.contents, this);
       }
       return result;
     };
@@ -412,6 +420,48 @@
         scheduleFlush();
         return result;
       };
+    }
+  }
+
+  function installCanvasTextHooks() {
+    const canvasContext = window.CanvasRenderingContext2D;
+    const prototype = canvasContext && canvasContext.prototype;
+    if (!prototype || prototype.__rpgTextOverlayCanvasHooks) {
+      return;
+    }
+
+    Object.defineProperty(prototype, "__rpgTextOverlayCanvasHooks", {
+      value: true,
+      configurable: true,
+    });
+
+    const fillText = prototype.fillText;
+    if (typeof fillText === "function") {
+      prototype.fillText = function (text, x, y, maxWidth) {
+        const result = fillText.apply(this, arguments);
+        captureCanvasText(this, text, x, y, maxWidth);
+        return result;
+      };
+    }
+
+    const strokeText = prototype.strokeText;
+    if (typeof strokeText === "function") {
+      prototype.strokeText = function (text, x, y, maxWidth) {
+        const result = strokeText.apply(this, arguments);
+        captureCanvasText(this, text, x, y, maxWidth);
+        return result;
+      };
+    }
+  }
+
+  function trackBitmapOwner(bitmap, owner) {
+    if (!bitmap || !owner) {
+      return;
+    }
+    state.bitmapOwners.set(bitmap, owner);
+    const context = bitmap._context;
+    if (context) {
+      state.contextOwners.set(context, { bitmap, owner });
     }
   }
 
@@ -610,6 +660,7 @@
     if (!owner || rawText === undefined || rawText === null) {
       return;
     }
+    trackBitmapOwner(bitmap, owner);
 
     const text = String(rawText);
     if (!text) {
@@ -671,6 +722,70 @@
       height,
       fontSize: bitmap.fontSize || owner.standardFontSize?.() || 24,
       fontFace: bitmap.fontFace || owner.standardFontFace?.() || "sans-serif",
+      updatedAt: performance.now(),
+    });
+  }
+
+  function captureCanvasText(context, rawText, x, y, maxWidth) {
+    if (state.canvasTextCaptureDepth > 0) {
+      return;
+    }
+
+    const binding = state.contextOwners.get(context);
+    if (!binding?.owner || rawText === undefined || rawText === null) {
+      return;
+    }
+
+    const text = String(rawText);
+    if (!text) {
+      return;
+    }
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+
+    const bitmap = binding.bitmap;
+    const owner = binding.owner;
+    const fontSize = canvasFontSize(context, bitmap, owner);
+    const height = Math.max(1, owner.lineHeight?.() || Math.ceil(fontSize * 1.25));
+    const measuredWidth = safeMeasureCanvas(context, bitmap, text);
+    const width = Math.max(1, Math.min(measuredWidth, Number(maxWidth) || measuredWidth));
+    const left = canvasTextLeft(x, width, context.textAlign);
+    const top = canvasTextTop(y, fontSize, height, context.textBaseline);
+
+    if (
+      top < -height ||
+      top >= bitmap.height ||
+      left > bitmap.width ||
+      left + width < 0
+    ) {
+      return;
+    }
+
+    if (owner._checkWordWrapMode) {
+      return;
+    }
+
+    const key = [
+      ownerId(owner),
+      "canvas",
+      Math.round(left),
+      Math.round(top),
+      Math.round(width),
+      Math.round(height),
+      hashText(text),
+    ].join(":");
+
+    upsertEntry(key, {
+      owner,
+      text,
+      x: left,
+      y: top,
+      width,
+      height,
+      fontSize,
+      fontFace: canvasFontFace(context) || bitmap.fontFace || owner.standardFontFace?.() || "sans-serif",
       updatedAt: performance.now(),
     });
   }
@@ -737,6 +852,52 @@
     } catch (_error) {
       return Math.max(1, text.length * (bitmap.fontSize || 24) * 0.6);
     }
+  }
+
+  function safeMeasureCanvas(context, bitmap, text) {
+    try {
+      return Math.max(1, context.measureText(text).width);
+    } catch (_error) {
+      return Math.max(1, text.length * (canvasFontSize(context, bitmap, null) || 24) * 0.6);
+    }
+  }
+
+  function canvasFontSize(context, bitmap, owner) {
+    const match = String(context.font || "").match(/(\d+(?:\.\d+)?)px/);
+    const parsed = match ? Number(match[1]) : 0;
+    return parsed || bitmap?.fontSize || owner?.standardFontSize?.() || 24;
+  }
+
+  function canvasFontFace(context) {
+    const font = String(context.font || "").trim();
+    if (!font) {
+      return "";
+    }
+    const match = font.match(/\d+(?:\.\d+)?px\s+(.+)$/);
+    return match ? match[1] : "";
+  }
+
+  function canvasTextLeft(x, width, align) {
+    if (align === "center") {
+      return x - width / 2;
+    }
+    if (align === "right" || align === "end") {
+      return x - width;
+    }
+    return x;
+  }
+
+  function canvasTextTop(y, fontSize, height, baseline) {
+    if (baseline === "top" || baseline === "hanging") {
+      return y;
+    }
+    if (baseline === "middle") {
+      return y - height / 2;
+    }
+    if (baseline === "bottom" || baseline === "ideographic") {
+      return y - height;
+    }
+    return y - fontSize;
   }
 
   // Converts text alignment into a left x coordinate.
