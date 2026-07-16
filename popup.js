@@ -7,6 +7,7 @@ const ui = {
   status: document.getElementById("status"),
   overlayToggle: document.getElementById("overlay-toggle"),
   showToggle: document.getElementById("show-toggle"),
+  guardPanel: document.querySelector(".guard-panel"),
   guardToggle: document.getElementById("guard-toggle"),
   guardChips: document.getElementById("guard-chips"),
   addKey: document.getElementById("add-key"),
@@ -54,7 +55,7 @@ ui.guardToggle.addEventListener("change", async () => {
 });
 
 ui.addKey.addEventListener("click", () => {
-  if (!state.guard.enabled) {
+  if (!guardControlsEnabled()) {
     return;
   }
   recording = !recording;
@@ -183,21 +184,27 @@ function sameChord(a, b) {
 }
 
 function render() {
-  const guardEnabled = state.guard.enabled;
+  const guardEnabled = guardControlsEnabled();
   ui.status.textContent = state.overlayEnabled ? "On" : "Off";
   ui.status.className = state.overlayEnabled ? "status on" : "status";
   ui.overlayToggle.disabled = false;
   ui.overlayToggle.checked = state.overlayEnabled;
   ui.showToggle.disabled = !state.overlayEnabled;
   ui.showToggle.checked = state.showEnabled;
-  ui.guardToggle.disabled = false;
-  ui.guardToggle.checked = guardEnabled;
+  ui.guardPanel.classList.toggle("muted", !state.overlayEnabled);
+  ui.guardPanel.setAttribute("aria-disabled", String(!state.overlayEnabled));
+  ui.guardToggle.disabled = !state.overlayEnabled;
+  ui.guardToggle.checked = state.guard.enabled;
   if (!guardEnabled) recording = false;
   ui.addKey.disabled = !guardEnabled;
   ui.addKey.classList.toggle("recording", recording);
   ui.addKeyLabel.textContent = recording ? "Press key" : "Add key";
   ui.guardChips.classList.toggle("disabled", !guardEnabled);
   renderGuardChips();
+}
+
+function guardControlsEnabled() {
+  return Boolean(state.overlayEnabled && state.guard.enabled);
 }
 
 function renderGuardChips() {
@@ -216,9 +223,9 @@ function renderGuardChips() {
     remove.title = "Remove key";
     remove.setAttribute("aria-label", `Remove ${label.textContent}`);
     remove.textContent = "x";
-    remove.disabled = !state.guard.enabled;
+    remove.disabled = !guardControlsEnabled();
     remove.addEventListener("click", async () => {
-      if (!state.guard.enabled) {
+      if (!guardControlsEnabled()) {
         return;
       }
       const triggers = state.guard.triggers.filter((_, itemIndex) => itemIndex !== index);

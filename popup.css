@@ -64,6 +64,10 @@ h1 {
   background: #ffffff;
 }
 
+.guard-panel.muted {
+  opacity: 0.58;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;
